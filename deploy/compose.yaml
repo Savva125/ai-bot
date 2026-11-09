@@ -1,0 +1,92 @@
+name: creator-desk
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: creator_desk
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: creator_desk
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U creator_desk -d creator_desk]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment: &api-environment
+      SERVER_DATABASE_URL: postgresql+psycopg://creator_desk:${POSTGRES_PASSWORD}@db:5432/creator_desk
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:?set ADMIN_API_TOKEN}
+      MODEL_URL: http://model:8081/v1
+      MODEL_NAME: creator-desk
+      MODEL_PARALLEL: ${MODEL_PARALLEL:-1}
+      MODEL_TIMEOUT: 180
+    command: [python, -m, creator_desk_server.manage, migrate]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment: *api-environment
+    expose: ["8000"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  model:
+    image: ${LLAMA_SERVER_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+    gpus: all
+    volumes:
+      - ${MODEL_DIRECTORY:?set MODEL_DIRECTORY}:/models:ro
+    command: ["--model", "/models/model.gguf", "--alias", "creator-desk", "--host", "0.0.0.0", "--port", "8081", "--ctx-size", "8192", "--n-gpu-layers", "99", "--parallel", "${MODEL_PARALLEL:-1}", "--jinja", "--no-webui", "--log-disable"]
+    expose: ["8081"]
+    restart: unless-stopped
+
+  bot:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      ADMIN_API_URL: http://api:8000
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN}
+      TELEGRAM_ADMIN_IDS: ${TELEGRAM_ADMIN_IDS:?set TELEGRAM_ADMIN_IDS}
+    command: [python, -m, creator_desk_server.bot]
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  proxy:
+    image: caddy:2
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - certificates:/data
+      - caddy-config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  database:
+  certificates:
+  caddy-config:

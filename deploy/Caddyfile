@@ -1,0 +1,12 @@
+{$API_DOMAIN} {
+    request_body {
+        max_size 64KB
+    }
+    @public path /v1/* /health
+    handle @public {
+        reverse_proxy api:8000
+    }
+    handle {
+        respond 404
+    }
+}
