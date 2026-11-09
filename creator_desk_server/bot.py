@@ -5,7 +5,7 @@ import os
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, BotCommand
 import httpx
 
 from creator_desk.endpoints import validate_server_url
@@ -43,6 +43,8 @@ def describe(item):
 
 def build_dispatcher(admins, api_url, token):
     dp = Dispatcher()
+    from .bot_menu import register_menu
+    register_menu(dp, admins, api_url, token)
 
     @dp.message(Command("start", "help", "new", "list", "info", "extend", "block", "unblock", "reset"))
     async def handle(message: Message):
@@ -51,7 +53,8 @@ def build_dispatcher(admins, api_url, token):
         parts = (message.text or "").split()
         command = parts[0].split("@")[0][1:]
         if command in {"start", "help"}:
-            await message.answer(HELP)
+            from .bot_menu import home, WELCOME
+            await message.answer(WELCOME if command == 'start' else HELP, reply_markup=home())
             return
         try:
             method, body = "GET", None
@@ -120,10 +123,11 @@ def main():
 
     async def run():
         bot = Bot(os.environ["TELEGRAM_BOT_TOKEN"])
+        await bot.set_my_commands([BotCommand(command='start', description='Панель управления'), BotCommand(command='help', description='Помощь')])
         dp = build_dispatcher(admins, url, token)
         # Do not execute old queued administrative commands after a restart.
         await bot.delete_webhook(drop_pending_updates=True)
-        await dp.start_polling(bot, allowed_updates=["message"], tasks_concurrency_limit=4)
+        await dp.start_polling(bot, allowed_updates=["message", "callback_query"], tasks_concurrency_limit=4)
     asyncio.run(run())
 
 
